@@ -1,7 +1,6 @@
 /**
- * ENGINE.JS - Liga Petarung v3.0
- * Core Engine: Combat System, Flags, Toast, Screen Effects
- * 100% Vanilla JS, Offline-First
+ * ENGINE.JS - Liga Petarung v4.0
+ * Telegraphed Combat, Dialogue System, Narrative Bridge, Category Crafting
  */
 
 let state = {
@@ -13,7 +12,6 @@ let state = {
   selectedCraftItems: [],
   completedActions: [],
   flags: {},
-  currentStance: 'traditional',
   isAudioMuted: false,
   isTypewriterActive: false,
   typewriterTimer: null
@@ -25,19 +23,16 @@ let state = {
 const AudioManager = {
   bgmAudio: null,
   audioCtx: null,
-
   init() {
     if (GAME_DATA.audio_config && GAME_DATA.audio_config.bgm) {
       this.bgmAudio = new Audio(GAME_DATA.audio_config.bgm);
       this.bgmAudio.loop = true;
     }
   },
-
   playBGM() {
     if (state.isAudioMuted || !this.bgmAudio) return;
     this.bgmAudio.play().catch(() => {});
   },
-
   playSFX(type) {
     if (state.isAudioMuted) return;
     let sfxPath = GAME_DATA.audio_config ? GAME_DATA.audio_config[type] : null;
@@ -48,13 +43,11 @@ const AudioManager = {
       this.playSynthSFX(type);
     }
   },
-
   playSynthSFX(type) {
     try {
       if (!this.audioCtx) this.audioCtx = new (window.AudioContext || window.webkitAudioContext)();
       if (type === 'sfx_victory') {
-        const notes = [523, 659, 784, 1047];
-        notes.forEach((freq, i) => {
+        [523, 659, 784, 1047].forEach((freq, i) => {
           const o = this.audioCtx.createOscillator();
           const g = this.audioCtx.createGain();
           o.connect(g); g.connect(this.audioCtx.destination);
@@ -67,8 +60,7 @@ const AudioManager = {
         return;
       }
       if (type === 'sfx_defeat') {
-        const notes = [392, 330, 262, 196];
-        notes.forEach((freq, i) => {
+        [392, 330, 262, 196].forEach((freq, i) => {
           const o = this.audioCtx.createOscillator();
           const g = this.audioCtx.createGain();
           o.connect(g); g.connect(this.audioCtx.destination);
@@ -121,13 +113,13 @@ function showToast(message, type = 'info', duration = 3000) {
 // SCREEN EFFECTS
 // ============================================================
 function triggerScreenShake(intensity = 'medium') {
-  const container = document.getElementById('app-container');
-  if (!container) return;
+  const c = document.getElementById('app-container');
+  if (!c) return;
   const cls = `shake-${intensity}`;
-  container.classList.remove('shake-light', 'shake-medium', 'shake-heavy');
-  void container.offsetWidth;
-  container.classList.add(cls);
-  setTimeout(() => container.classList.remove(cls), 450);
+  c.classList.remove('shake-light', 'shake-medium', 'shake-heavy');
+  void c.offsetWidth;
+  c.classList.add(cls);
+  setTimeout(() => c.classList.remove(cls), 450);
 }
 
 function showFloatingDamage(amount, targetId, isHeal = false) {
@@ -136,7 +128,7 @@ function showFloatingDamage(amount, targetId, isHeal = false) {
   const rect = target.getBoundingClientRect();
   const el = document.createElement('div');
   el.className = `floating-damage ${isHeal ? 'heal' : 'dmg'}`;
-  el.innerText = isHeal ? `+${amount}` : `-${amount}`;
+  el.innerText = isHeal ? `+${amount}` : `-${Math.abs(amount)}`;
   el.style.left = (rect.left + rect.width / 2 - 20) + 'px';
   el.style.top = rect.top + 'px';
   document.body.appendChild(el);
@@ -144,269 +136,382 @@ function showFloatingDamage(amount, targetId, isHeal = false) {
 }
 
 function showStatFloat(statKey, delta) {
-  if (delta === 0) return;
+  if (!delta) return;
   const cfg = GAME_DATA.stats_config[statKey];
   if (!cfg) return;
   const el = document.createElement('div');
   el.className = `stat-float ${delta > 0 ? 'positive' : 'negative'}`;
   el.innerText = `${delta > 0 ? '+' : ''}${delta} ${cfg.icon}`;
-  el.style.bottom = '120px';
-  el.style.left = (30 + Math.random() * 60) + '%';
+  el.style.bottom = '140px';
+  el.style.left = (20 + Math.random() * 60) + '%';
   document.body.appendChild(el);
-  setTimeout(() => el.remove(), 1500);
+  setTimeout(() => el.remove(), 1600);
 }
 
 // ============================================================
-// COMBAT SYSTEM
+// TRANSITION SCREEN
+// ============================================================
+function showTransition(text, callback) {
+  const el = document.getElementById('transition-screen');
+  const textEl = el.querySelector('.transition-text');
+  const hint = el.querySelector('.transition-hint');
+  textEl.innerText = text;
+  hint.style.opacity = '0';
+  el.classList.add('active');
+
+  let dismissed = false;
+  const dismiss = () => {
+    if (dismissed) return;
+    dismissed = true;
+    el.classList.remove('active');
+    el.removeEventListener('click', dismiss);
+    document.removeEventListener('keydown', keyHandler);
+    if (callback) callback();
+  };
+  const keyHandler = (e) => { if (e.key === 'Enter' || e.key === ' ') dismiss(); };
+
+  setTimeout(() => { hint.style.opacity = '1'; }, 700);
+  setTimeout(() => {
+    el.addEventListener('click', dismiss);
+    document.addEventListener('keydown', keyHandler);
+  }, 400);
+}
+
+// ============================================================
+// COMBAT SYSTEM - Telegraphed Narrative Rounds
 // ============================================================
 const CombatSystem = {
   active: false,
-  enemy: null,
-  combatDef: null,
-  actionIdForRollback: null,
-  round: 0,
-  log: [],
-  playerDefending: false,
+  def: null,
+  roundIdx: 0,
+  debuffs: [],
 
-  start(enemyDef) {
+  start(def) {
     this.active = true;
-    this.enemy = {
-      name: enemyDef.name,
-      emoji: enemyDef.emoji || '🥋',
-      maxHp: enemyDef.maxHp,
-      currentHp: enemyDef.maxHp,
-      attack: enemyDef.attack,
-      defense: enemyDef.defense || 0
-    };
-    this.round = 1;
-    this.playerDefending = false;
-    this.log = [`⚔️ Pertarungan melawan <strong>${enemyDef.name}</strong> dimulai!`];
-    this.render();
+    this.def = def;
+    this.roundIdx = 0;
+    this.debuffs = [];
+    document.getElementById('combat-hud').classList.add('active');
     AudioManager.playSFX('sfx_action');
+    this.showIntro();
   },
 
-  playerHp() { return state.stats.stat1; },
-  playerMaxHp() { return GAME_DATA.stats_config.stat1.max; },
-  playerQi() { return state.stats.stat2; },
-  playerMaxQi() { return GAME_DATA.stats_config.stat2.max; },
+  showIntro() {
+    const hud = document.getElementById('combat-hud');
+    hud.querySelector('#combat-enemy-name').innerText = `${this.def.enemy_emoji || '🥋'} ${this.def.enemy_name}`;
+    hud.querySelector('#combat-round-indicator').innerText = `PERTARUNGAN`;
+    hud.querySelector('#combat-narration').innerHTML = `<p>${this.def.intro}</p>`;
+    hud.querySelector('#combat-debuffs').innerHTML = '';
+    this.updatePlayerHp();
 
-  calcDamage(base, enemyDef) {
-    const variance = 0.85 + Math.random() * 0.3;
-    return Math.max(1, Math.round(base * variance) - (enemyDef || 0));
+    const optionsEl = hud.querySelector('#combat-options');
+    optionsEl.innerHTML = '';
+    const btn = document.createElement('button');
+    btn.className = 'combat-btn combat-btn-wide';
+    btn.innerHTML = '⚔️ Mulai Ronde 1';
+    btn.onclick = () => this.renderRound();
+    optionsEl.appendChild(btn);
   },
 
-  playerAttack(type) {
-    if (!this.active) return;
-    const stance = state.currentStance;
-    let baseDmg = 0;
-    let qiCost = 0;
-    let logMsg = '';
+  updatePlayerHp() {
+    const hud = document.getElementById('combat-hud');
+    const hp = state.stats.stat1 || 0;
+    const maxHp = GAME_DATA.stats_config.stat1.max;
+    const pct = Math.max(0, (hp / maxHp) * 100);
+    hud.querySelector('#combat-player-hp-fill').style.width = pct + '%';
+    hud.querySelector('#combat-player-hp-text').innerText = `${hp}/${maxHp}`;
+    const qi = state.stats.stat2 || 0;
+    const maxQi = GAME_DATA.stats_config.stat2.max;
+    hud.querySelector('#combat-player-qi-fill').style.width = ((qi / maxQi) * 100) + '%';
+    hud.querySelector('#combat-player-qi-text').innerText = `${qi}/${maxQi}`;
+  },
 
-    if (type === 'basic') {
-      const primary = stance === 'traditional' ? this.playerQi() : this.playerHp();
-      baseDmg = 16 + Math.floor(primary / 15);
-      logMsg = stance === 'traditional'
-        ? `👊 Pukulan lurus Sumbu Jagat mendarat di rahang ${this.enemy.name}`
-        : `👊 Jab cepat modern menghantam wajah ${this.enemy.name}`;
-    } else if (type === 'special') {
-      if (stance === 'traditional') {
-        qiCost = 6;
-        baseDmg = 24 + Math.floor(this.playerQi() / 10);
-        logMsg = `⚡ Konter presisi Sumbu Jagat! Anda membaca gerakan dan menyerang titik buta`;
+  renderRound() {
+    const round = this.def.rounds[this.roundIdx];
+    if (!round) { this.endCombat(true); return; }
+
+    const hud = document.getElementById('combat-hud');
+    hud.querySelector('#combat-round-indicator').innerText = `RONDE ${round.round} / ${this.def.rounds.length}`;
+    hud.querySelector('#combat-narration').innerHTML = `<p class="telegraph-text">${round.telegraph}</p>`;
+
+    const debuffEl = hud.querySelector('#combat-debuffs');
+    if (this.debuffs.length > 0) {
+      debuffEl.innerHTML = this.debuffs.map(d =>
+        `<span class="debuff-badge">⚠️ ${d.name}</span>`
+      ).join('');
+    } else {
+      debuffEl.innerHTML = '';
+    }
+
+    this.updatePlayerHp();
+
+    const optionsEl = hud.querySelector('#combat-options');
+    optionsEl.innerHTML = '';
+
+    round.options.forEach(opt => {
+      const btn = document.createElement('button');
+      btn.className = 'combat-option';
+
+      const missing = [];
+      if (opt.required_stat) {
+        Object.keys(opt.required_stat).forEach(k => {
+          if ((state.stats[k] || 0) < opt.required_stat[k]) {
+            const cfg = GAME_DATA.stats_config[k];
+            missing.push(`${cfg.icon} ${cfg.name} ≥ ${opt.required_stat[k]}`);
+          }
+        });
+      }
+
+      if (missing.length > 0) {
+        btn.disabled = true;
+        btn.innerHTML = `${opt.label}<br><small class="req-hint">🔒 ${missing.join(' • ')}</small>`;
       } else {
-        qiCost = 8;
-        baseDmg = 26 + Math.floor(this.playerHp() / 10);
-        logMsg = `💥 Kombinasi cepat bertubi-tubi! ${this.enemy.name} terhuyung`;
+        btn.innerText = opt.label;
+        btn.onclick = () => this.chooseOption(opt);
       }
-      if (this.playerQi() < qiCost) {
-        this.log.push(`⚠️ Qi tidak cukup untuk teknik khusus!`);
-        this.render();
-        return;
-      }
-      state.stats.stat2 = Math.max(0, this.playerQi() - qiCost);
+      optionsEl.appendChild(btn);
+    });
+  },
+
+  chooseOption(opt) {
+    AudioManager.playSFX(opt.vibrate ? 'sfx_danger' : 'sfx_action');
+    if (opt.vibrate && navigator.vibrate) navigator.vibrate(200);
+
+    if (opt.stat_changes) {
+      Object.keys(opt.stat_changes).forEach(k => {
+        const cfg = GAME_DATA.stats_config[k];
+        const max = cfg ? cfg.max : 100;
+        const before = state.stats[k] || 0;
+        state.stats[k] = Math.max(0, Math.min(max, before + opt.stat_changes[k]));
+        showStatFloat(k, state.stats[k] - before);
+      });
       renderStats();
+      this.updatePlayerHp();
     }
 
-    const dmg = this.calcDamage(baseDmg, this.enemy.defense);
-    this.enemy.currentHp = Math.max(0, this.enemy.currentHp - dmg);
-    this.log.push(`${logMsg} — <strong>${dmg} damage!</strong>`);
-    if (qiCost > 0) this.log.push(`🧘 Qi berkurang ${qiCost}`);
+    if (opt.debuff && !this.debuffs.find(d => d.name === opt.debuff.name)) {
+      this.debuffs.push(opt.debuff);
+    }
 
-    triggerScreenShake(dmg > 25 ? 'heavy' : 'light');
-    showFloatingDamage(dmg, 'combat-enemy-hp-fill');
-    AudioManager.playSFX('sfx_action');
+    const dmg = opt.stat_changes && opt.stat_changes.stat1;
+    if (dmg && dmg <= -20) triggerScreenShake('heavy');
+    else if (dmg && dmg <= -10) triggerScreenShake('medium');
+    else if (dmg && dmg < 0) triggerScreenShake('light');
 
-    if (this.enemy.currentHp <= 0) {
-      this.log.push(`💥 <strong>${this.enemy.name} TUMBANG!</strong>`);
-      this.render();
-      setTimeout(() => this.endCombat(true), 1000);
+    if (dmg && dmg < 0) showFloatingDamage(dmg, 'combat-player-hp-fill');
+
+    this.showOutcome(opt);
+  },
+
+  showOutcome(opt) {
+    const hud = document.getElementById('combat-hud');
+    hud.querySelector('#combat-narration').innerHTML = `<p class="outcome-text">${opt.outcome}</p>`;
+    const optionsEl = hud.querySelector('#combat-options');
+    optionsEl.innerHTML = '';
+
+    // Immediate defeat check
+    if (state.stats.stat1 <= 0 || state.stats.stat2 <= 0 || state.stats.stat3 <= 0) {
+      const btn = document.createElement('button');
+      btn.className = 'combat-btn combat-btn-wide combat-btn-danger';
+      btn.innerText = '💀 Tubuh Tak Mampu Lagi...';
+      btn.onclick = () => this.endCombat(false);
+      optionsEl.appendChild(btn);
       return;
     }
-    this.enemyTurn();
-  },
 
-  playerDefend() {
-    if (!this.active) return;
-    this.playerDefending = true;
-    const recover = 14;
-    state.stats.stat2 = Math.min(this.playerMaxQi(), this.playerQi() + recover);
-    this.log.push(`🛡️ Anda menarik napas dalam, mengalirkan Qi ke inti tubuh — <strong>+${recover} Qi</strong>`);
-    showStatFloat('stat2', recover);
-    renderStats();
-    this.enemyTurn();
-  },
+    this.roundIdx++;
 
-  playerChangeStance() {
-    if (!this.active) return;
-    state.currentStance = state.currentStance === 'traditional' ? 'modern' : 'traditional';
-    const label = state.currentStance === 'traditional' ? '🥋 Sumbu Jagat' : '🥊 Modern Kickboxing';
-    this.log.push(`⚔️ Kuda-kuda beralih ke: <strong>${label}</strong>`);
-    AudioManager.playSFX('sfx_action');
-    this.enemyTurn();
-  },
-
-  enemyTurn() {
-    if (!this.active) return;
-    this.round++;
-
-    const qiDefense = Math.floor(this.playerQi() / 20);
-    let rawDmg = this.enemy.attack + Math.round(Math.random() * 4 - 2);
-    let finalDmg = Math.max(1, rawDmg - qiDefense);
-    if (this.playerDefending) finalDmg = Math.max(1, Math.round(finalDmg * 0.5));
-
-    state.stats.stat1 = Math.max(0, this.playerHp() - finalDmg);
-    this.log.push(`💢 ${this.enemy.name} menyerang balik — <strong>-${finalDmg} Stamina</strong>`);
-
-    triggerScreenShake('medium');
-    showFloatingDamage(finalDmg, 'combat-player-hp-fill');
-    AudioManager.playSFX('sfx_danger');
-    renderStats();
-
-    if (this.playerHp() <= 0) {
-      this.log.push(`💀 Anda tumbang...`);
-      this.render();
-      setTimeout(() => this.endCombat(false), 1000);
-      return;
+    if (this.roundIdx >= this.def.rounds.length) {
+      const btn = document.createElement('button');
+      btn.className = 'combat-btn combat-btn-wide combat-btn-success';
+      btn.innerText = '🏆 Selesaikan Pertarungan';
+      btn.onclick = () => this.endCombat(true);
+      optionsEl.appendChild(btn);
+    } else {
+      const btn = document.createElement('button');
+      btn.className = 'combat-btn combat-btn-wide';
+      btn.innerText = '→ Ronde Berikutnya';
+      btn.onclick = () => this.renderRound();
+      optionsEl.appendChild(btn);
     }
-    this.playerDefending = false;
-    this.render();
   },
 
   endCombat(victory) {
-    this.active = false;
-    const result = victory ? this.combatDef.victory : this.combatDef.defeat;
+    const outcome = victory ? this.def.victory : this.def.defeat;
 
-    if (!victory && this.actionIdForRollback) {
-      state.completedActions = state.completedActions.filter(id => id !== this.actionIdForRollback);
+    if (!victory && this.def._actionId) {
+      state.completedActions = state.completedActions.filter(id => id !== this.def._actionId);
     }
 
     const splash = document.createElement('div');
     splash.className = `combat-splash ${victory ? 'victory' : 'defeat'}`;
-    splash.innerHTML = victory
-      ? `<div class="splash-title">⚔️ KEMENANGAN!</div><div class="splash-sub">${this.enemy.name} tumbang</div>`
-      : `<div class="splash-title">💀 KEKALAHAN</div><div class="splash-sub">Anda tumbang di tangan ${this.enemy.name}</div>`;
+    splash.innerHTML = `
+      <div class="splash-title">${victory ? '⚔️ KEMENANGAN' : '💀 KEKALAHAN'}</div>
+      <div class="splash-sub">${victory ? this.def.enemy_name + ' tumbang' : 'Anda tumbang di tangan ' + this.def.enemy_name}</div>
+    `;
     document.body.appendChild(splash);
-
     AudioManager.playSFX(victory ? 'sfx_victory' : 'sfx_defeat');
 
-    setTimeout(() => splash.remove(), 1800);
-    hideCombatHUD();
-
-    setTimeout(() => this.applyOutcome(result), 1200);
+    setTimeout(() => {
+      splash.remove();
+      document.getElementById('combat-hud').classList.remove('active');
+      this.active = false;
+      this.applyOutcome(outcome);
+    }, 1700);
   },
 
-  applyOutcome(result) {
-    if (!result) { renderLocation(state.currentLocationId); return; }
+  applyOutcome(outcome) {
+    if (!outcome) { renderLocation(state.currentLocationId); return; }
 
-    if (result.stat_changes) {
-      Object.keys(result.stat_changes).forEach(k => {
+    if (outcome.stat_changes) {
+      Object.keys(outcome.stat_changes).forEach(k => {
         const cfg = GAME_DATA.stats_config[k];
-        const maxVal = cfg ? cfg.max : 100;
+        const max = cfg ? cfg.max : 100;
         const before = state.stats[k] || 0;
-        state.stats[k] = Math.max(0, Math.min(maxVal, before + result.stat_changes[k]));
+        state.stats[k] = Math.max(0, Math.min(max, before + outcome.stat_changes[k]));
         showStatFloat(k, state.stats[k] - before);
       });
       renderStats();
     }
 
-    if (result.unlocked_item_id && !state.inventory.includes(result.unlocked_item_id)) {
-      state.inventory.push(result.unlocked_item_id);
+    if (outcome.unlocked_item_id && !state.inventory.includes(outcome.unlocked_item_id)) {
+      state.inventory.push(outcome.unlocked_item_id);
+      const item = getAllEpisodeItems().find(i => i.id === outcome.unlocked_item_id);
+      if (item) showToast(`🎁 Didapat: <strong>${item.emoji} ${item.name}</strong>`, 'success');
     }
-    if (result.unlocked_item_ids) {
-      result.unlocked_item_ids.forEach(id => {
-        if (!state.inventory.includes(id)) state.inventory.push(id);
+    if (outcome.unlocked_item_ids) {
+      outcome.unlocked_item_ids.forEach(id => {
+        if (!state.inventory.includes(id)) {
+          state.inventory.push(id);
+          const item = getAllEpisodeItems().find(i => i.id === id);
+          if (item) showToast(`🎁 Didapat: <strong>${item.emoji} ${item.name}</strong>`, 'success');
+        }
       });
     }
-    if (result.sets_flag) {
-      if (typeof result.sets_flag === 'string') state.flags[result.sets_flag] = true;
-      else Object.assign(state.flags, result.sets_flag);
+    if (outcome.sets_flag) {
+      if (typeof outcome.sets_flag === 'string') state.flags[outcome.sets_flag] = true;
+      else Object.assign(state.flags, outcome.sets_flag);
     }
 
-    if (result.trigger_ending_id && state.currentEpisode.endings) {
-      const end = state.currentEpisode.endings[result.trigger_ending_id];
-      if (end) { showEnding(end); return; }
+    if (outcome.trigger_ending_id && state.currentEpisode.endings) {
+      const ending = state.currentEpisode.endings[outcome.trigger_ending_id];
+      if (ending) { showEnding(ending); return; }
     }
 
     if (state.stats.stat1 <= 0 || state.stats.stat2 <= 0 || state.stats.stat3 <= 0) {
       if (checkEndingTriggers({})) return;
     }
 
-    if (result.next_location_id) {
-      state.currentLocationId = result.next_location_id;
-      renderLocation(result.next_location_id);
-    } else if (result.outcome) {
-      startTypewriter(result.outcome, () => renderLocation(state.currentLocationId));
+    if (outcome.next_location_id) {
+      goToLocation(outcome.next_location_id, outcome.transition_text);
+    } else if (outcome.outcome) {
+      startTypewriter(outcome.outcome, () => renderLocation(state.currentLocationId));
     } else {
       renderLocation(state.currentLocationId);
     }
-
     saveGame();
-  },
-
-  render() {
-    const hud = document.getElementById('combat-hud');
-    if (!hud) return;
-    hud.querySelector('#combat-enemy-name').innerText = `${this.enemy.emoji} ${this.enemy.name}`;
-    hud.querySelector('#combat-enemy-hp-text').innerText = `${this.enemy.currentHp}/${this.enemy.maxHp}`;
-    hud.querySelector('#combat-enemy-hp-fill').style.width = `${(this.enemy.currentHp / this.enemy.maxHp) * 100}%`;
-    hud.querySelector('#combat-player-hp-text').innerText = `${this.playerHp()}/${this.playerMaxHp()}`;
-    hud.querySelector('#combat-player-hp-fill').style.width = `${(this.playerHp() / this.playerMaxHp()) * 100}%`;
-    hud.querySelector('#combat-player-qi-text').innerText = `${this.playerQi()}/${this.playerMaxQi()}`;
-    hud.querySelector('#combat-round').innerText = `Ronde ${this.round}`;
-    hud.querySelector('#combat-stance').innerText = state.currentStance === 'traditional' ? '🥋 Sumbu Jagat' : '🥊 Modern';
-
-    const logEl = hud.querySelector('#combat-log');
-    logEl.innerHTML = this.log.slice(-5).map(l => `<div class="combat-log-line">${l}</div>`).join('');
-    logEl.scrollTop = logEl.scrollHeight;
-
-    const actions = hud.querySelector('#combat-actions');
-    actions.innerHTML = '';
-    const addBtn = (label, handler, cls = '') => {
-      const b = document.createElement('button');
-      b.className = 'combat-btn ' + cls;
-      b.innerHTML = label;
-      b.onclick = handler;
-      actions.appendChild(b);
-    };
-    addBtn('👊<br>Serangan', () => this.playerAttack('basic'));
-    const spLabel = state.currentStance === 'traditional'
-      ? '⚡<br>Konter<br><small>-6 Qi</small>'
-      : '💥<br>Kombinasi<br><small>-8 Qi</small>';
-    addBtn(spLabel, () => this.playerAttack('special'), 'special');
-    addBtn('🛡️<br>Bertahan<br><small>+14 Qi</small>', () => this.playerDefend(), 'defend');
-    addBtn('⚔️<br>Ganti<br>Kuda-kuda', () => this.playerChangeStance(), 'stance');
   }
 };
 
-function showCombatHUD() {
-  const hud = document.getElementById('combat-hud');
-  if (hud) hud.classList.add('active');
-}
+// ============================================================
+// DIALOGUE SYSTEM - Adaptive Dialogue with Traps
+// ============================================================
+const DialogueSystem = {
+  active: false,
+  def: null,
+  onComplete: null,
 
-function hideCombatHUD() {
-  const hud = document.getElementById('combat-hud');
-  if (hud) hud.classList.remove('active');
-}
+  start(def, onComplete) {
+    this.active = true;
+    this.def = def;
+    this.onComplete = onComplete;
+    document.getElementById('dialogue-overlay').classList.add('active');
+    this.render();
+  },
+
+  render() {
+    const ov = document.getElementById('dialogue-overlay');
+    ov.querySelector('#dialogue-npc').innerText = this.def.npc;
+    ov.querySelector('#dialogue-personality').innerText = `Kepribadian: ${this.def.npc_personality}`;
+
+    const exprEl = ov.querySelector('#dialogue-expressions');
+    exprEl.innerHTML = this.def.micro_expressions.map(e =>
+      `<div class="micro-expr">👁️ ${e}</div>`
+    ).join('');
+
+    ov.querySelector('#dialogue-narrative').innerText = this.def.narrative;
+
+    const optsEl = ov.querySelector('#dialogue-options');
+    optsEl.innerHTML = '';
+
+    this.def.options.forEach(opt => {
+      const btn = document.createElement('button');
+      btn.className = 'dialogue-option';
+
+      const missing = [];
+      if (opt.required_stat) {
+        Object.keys(opt.required_stat).forEach(k => {
+          if ((state.stats[k] || 0) < opt.required_stat[k]) {
+            const cfg = GAME_DATA.stats_config[k];
+            missing.push(`${cfg.icon} ${cfg.name} ≥ ${opt.required_stat[k]}`);
+          }
+        });
+      }
+
+      if (missing.length > 0) {
+        btn.disabled = true;
+        btn.innerHTML = `${opt.description}<br><small class="req-hint">🔒 ${missing.join(' • ')}</small>`;
+      } else {
+        btn.innerText = opt.description;
+        btn.onclick = () => this.chooseOption(opt);
+      }
+      optsEl.appendChild(btn);
+    });
+  },
+
+  chooseOption(opt) {
+    AudioManager.playSFX(opt.is_trap ? 'sfx_danger' : 'sfx_action');
+
+    if (opt.stat_changes) {
+      Object.keys(opt.stat_changes).forEach(k => {
+        const cfg = GAME_DATA.stats_config[k];
+        const max = cfg ? cfg.max : 100;
+        const before = state.stats[k] || 0;
+        state.stats[k] = Math.max(0, Math.min(max, before + opt.stat_changes[k]));
+        showStatFloat(k, state.stats[k] - before);
+      });
+      renderStats();
+    }
+
+    if (opt.unlocked_item_id && !state.inventory.includes(opt.unlocked_item_id)) {
+      state.inventory.push(opt.unlocked_item_id);
+      const item = getAllEpisodeItems().find(i => i.id === opt.unlocked_item_id);
+      if (item) showToast(`🎁 Didapat: <strong>${item.emoji} ${item.name}</strong>`, 'success');
+    }
+
+    if (opt.sets_flag) {
+      if (typeof opt.sets_flag === 'string') state.flags[opt.sets_flag] = true;
+      else Object.assign(state.flags, opt.sets_flag);
+    }
+
+    const ov = document.getElementById('dialogue-overlay');
+    ov.querySelector('#dialogue-narrative').innerHTML = `<p class="dialogue-outcome">${opt.outcome}</p>`;
+    ov.querySelector('#dialogue-options').innerHTML = '';
+
+    const cont = document.createElement('button');
+    cont.className = 'dialogue-option dialogue-continue';
+    cont.innerText = '→ Lanjutkan';
+    cont.onclick = () => this.close();
+    ov.querySelector('#dialogue-options').appendChild(cont);
+  },
+
+  close() {
+    this.active = false;
+    document.getElementById('dialogue-overlay').classList.remove('active');
+    if (this.onComplete) this.onComplete();
+    saveGame();
+  }
+};
 
 // ============================================================
 // INIT
@@ -428,22 +533,64 @@ function applyThemeColors() {
   document.getElementById('app-title').innerText = GAME_DATA.game_title || "LIGA PETARUNG";
 }
 
+// ============================================================
+// EPISODE LOCKING
+// ============================================================
+function getUnlockedEpisodes() {
+  try {
+    return JSON.parse(localStorage.getItem('liga_petarung_unlocked_episodes') || '[]');
+  } catch (e) { return []; }
+}
+
+function isEpisodeUnlocked(epId) {
+  if (!GAME_DATA.episodes || GAME_DATA.episodes.length === 0) return false;
+  if (epId === GAME_DATA.episodes[0].id) return true;
+  return getUnlockedEpisodes().includes(epId);
+}
+
+function unlockEpisode(epId) {
+  const unlocked = getUnlockedEpisodes();
+  if (!unlocked.includes(epId)) {
+    unlocked.push(epId);
+    localStorage.setItem('liga_petarung_unlocked_episodes', JSON.stringify(unlocked));
+  }
+}
+
 function renderTitleScreen() {
   const epContainer = document.getElementById('episode-list');
   epContainer.innerHTML = '';
-  if (GAME_DATA.episodes && GAME_DATA.episodes.length > 0) {
-    GAME_DATA.episodes.forEach(ep => {
-      let btn = document.createElement('button');
-      btn.className = 'btn-main';
-      btn.innerText = ep.title;
+
+  GAME_DATA.episodes.forEach((ep, idx) => {
+    const unlocked = isEpisodeUnlocked(ep.id);
+    const btn = document.createElement('button');
+    btn.className = 'btn-main episode-btn';
+    if (unlocked) {
+      btn.innerHTML = `${ep.title}<br><small class="ep-synopsis">${ep.synopsis || ''}</small>`;
       btn.onclick = () => startEpisode(ep.id);
-      epContainer.appendChild(btn);
-    });
-  }
+    } else {
+      btn.disabled = true;
+      btn.classList.add('episode-locked');
+      const prevEp = GAME_DATA.episodes[idx - 1];
+      btn.innerHTML = `🔒 ${ep.title}<br><small class="ep-synopsis">Selesaikan "${prevEp ? prevEp.title.split(':')[0] : 'episode sebelumnya'}" untuk membuka</small>`;
+    }
+    epContainer.appendChild(btn);
+  });
+
   const saveBtn = document.getElementById('btn-continue');
-  if (localStorage.getItem('liga_petarung_save')) {
-    saveBtn.style.display = 'block';
-    saveBtn.onclick = () => loadGame();
+  const saved = localStorage.getItem('liga_petarung_save');
+  if (saved) {
+    try {
+      const s = JSON.parse(saved);
+      if (s.currentEpisode) {
+        saveBtn.style.display = 'block';
+        saveBtn.innerHTML = `Lanjutkan: ${s.currentEpisode.title.split(':')[0]}`;
+        saveBtn.onclick = () => loadGame();
+      } else {
+        saveBtn.style.display = 'none';
+      }
+    } catch (e) {
+      saveBtn.style.display = 'none';
+    }
   } else {
     saveBtn.style.display = 'none';
   }
@@ -452,17 +599,19 @@ function renderTitleScreen() {
 function startEpisode(epId) {
   const ep = GAME_DATA.episodes.find(e => e.id === epId);
   if (!ep) return;
+
   state.currentEpisode = ep;
   state.currentLocationId = ep.start_location_id;
   state.inventory = [];
   state.unlockedLocations = [ep.start_location_id];
   state.completedActions = [];
   state.flags = {};
-  state.currentStance = 'traditional';
   state.selectedCraftItems = [];
+
   Object.keys(GAME_DATA.stats_config).forEach(k => {
     state.stats[k] = GAME_DATA.stats_config[k].initial;
   });
+
   switchScreen('game-screen');
   document.getElementById('episode-title').innerText = ep.title.split(':')[0] || "Episode";
   renderStats();
@@ -477,6 +626,9 @@ function advanceToNextEpisode(nextEpId) {
     location.reload();
     return;
   }
+
+  unlockEpisode(nextEpId);
+
   state.currentEpisode = nextEp;
   state.currentLocationId = nextEp.start_location_id;
   state.stats.stat3 = Math.min(100, (state.stats.stat3 || 20) + 25);
@@ -485,7 +637,6 @@ function advanceToNextEpisode(nextEpId) {
     state.unlockedLocations.push(nextEp.start_location_id);
   }
   state.completedActions = [];
-  state.currentStance = 'traditional';
   saveGame();
   switchScreen('game-screen');
   document.getElementById('episode-title').innerText = nextEp.title.split(':')[0] || "Episode";
@@ -494,6 +645,9 @@ function advanceToNextEpisode(nextEpId) {
   AudioManager.playBGM();
 }
 
+// ============================================================
+// RENDERING
+// ============================================================
 function renderStats() {
   const container = document.getElementById('stats-container');
   container.innerHTML = '';
@@ -503,10 +657,7 @@ function renderStats() {
     const pct = Math.max(0, Math.min(100, (val / cfg.max) * 100));
     container.innerHTML += `
       <div class="stat-box">
-        <div class="stat-label">
-          <span>${cfg.icon} ${cfg.name}</span>
-          <span>${val}</span>
-        </div>
+        <div class="stat-label"><span>${cfg.icon} ${cfg.name}</span><span>${val}</span></div>
         <div class="bar-bg"><div class="bar-fill" style="width: ${pct}%"></div></div>
       </div>
     `;
@@ -526,6 +677,8 @@ function renderLocation(locId) {
   saveGame();
   const loc = state.currentEpisode.locations.find(l => l.id === locId);
   if (!loc) return;
+
+  state.currentLocationId = locId;
   document.getElementById('location-name').innerText = loc.name;
 
   const imgBox = document.getElementById('scene-visual');
@@ -539,8 +692,17 @@ function renderLocation(locId) {
   }
 
   startTypewriter(getNarrativeForLocation(loc), () => {
-    renderActions(loc.action_options);
+    renderActions(loc.action_options, loc);
   });
+}
+
+function goToLocation(locId, transitionText) {
+  state.currentLocationId = locId;
+  if (transitionText) {
+    showTransition(transitionText, () => renderLocation(locId));
+  } else {
+    renderLocation(locId);
+  }
 }
 
 function startTypewriter(text, onComplete) {
@@ -557,7 +719,7 @@ function startTypewriter(text, onComplete) {
     box.innerText += text.charAt(i);
     i++;
     if (i >= text.length) completeTypewriter(text, onComplete);
-  }, 18);
+  }, 16);
   skipBtn.onclick = () => completeTypewriter(text, onComplete);
 }
 
@@ -569,50 +731,95 @@ function completeTypewriter(text, onComplete) {
   if (onComplete) onComplete();
 }
 
-function renderActions(actions) {
+// ============================================================
+// ACTION RENDERING - Grouped by Category
+// ============================================================
+function renderActions(actions, location) {
   const list = document.getElementById('action-list');
   list.innerHTML = '';
-  if (!actions) return;
+  if (!actions && !location) return;
+
   const allItems = getAllEpisodeItems();
+  const groups = {
+    hub: { label: '🏠 Area Persiapan', actions: [] },
+    exploration: { label: '🔍 Area Eksplorasi', actions: [] },
+    arena: { label: '⚔️ Arena Pertarungan', actions: [] },
+    other: { label: '📋 Aksi Lainnya', actions: [] }
+  };
 
-  actions.forEach(act => {
-    if (act.once && state.completedActions && state.completedActions.includes(act.action_id)) return;
+  if (actions) {
+    actions.forEach(act => {
+      if (act.once && state.completedActions.includes(act.action_id)) return;
+      const cat = act.category || 'other';
+      if (groups[cat]) groups[cat].actions.push(act);
+      else groups.other.actions.push(act);
+    });
+  }
 
-    let btn = document.createElement('button');
-    btn.className = 'btn-action';
-
-    const missing = [];
-    if (act.required_item_id && !state.inventory.includes(act.required_item_id)) {
-      const item = allItems.find(i => i.id === act.required_item_id);
-      missing.push(`Butuh: ${item ? item.name : act.required_item_id}`);
-    }
-    if (act.required_stat) {
-      Object.keys(act.required_stat).forEach(k => {
-        const cfg = GAME_DATA.stats_config[k];
-        const curVal = state.stats[k] || 0;
-        if (curVal < act.required_stat[k]) {
-          missing.push(`${cfg ? cfg.icon + ' ' + cfg.name : k} ≥ ${act.required_stat[k]}`);
-        }
+  // Auto-rest di hub
+  if (location && location.rest_available && location.category === 'hub') {
+    const restActionId = `auto_rest_${location.id}`;
+    if (!state.completedActions.includes(restActionId)) {
+      groups.hub.actions.push({
+        action_id: restActionId,
+        description: '😴 Duduk bersila, atur napas dan pulihkan tubuh',
+        category: 'hub',
+        once: true,
+        outcome: 'Kau menutup mata, menarik napas panjang, dan merasakan aliran Qi kembali mengisi tubuh yang lelah. Sendi-sendi yang tadinya kaku mulai melunak.',
+        stat_changes: { stat1: 15, stat2: 5 }
       });
     }
+  }
 
-    if (missing.length > 0) {
-      btn.disabled = true;
-      btn.classList.add('btn-action-disabled');
-      btn.innerHTML = `${act.description}<br><small class="req-hint">🔒 ${missing.join(' • ')}</small>`;
-    } else {
-      if (act.combat) {
-        btn.innerHTML = `⚔️ ${act.description}`;
-        btn.classList.add('btn-action-combat');
-      } else {
-        btn.innerText = act.description;
-      }
-      btn.onclick = () => executeAction(act);
-    }
-    list.appendChild(btn);
+  Object.keys(groups).forEach(cat => {
+    const g = groups[cat];
+    if (g.actions.length === 0) return;
+
+    const header = document.createElement('div');
+    header.className = `action-group-header group-${cat}`;
+    header.innerText = g.label;
+    list.appendChild(header);
+
+    g.actions.forEach(act => {
+      list.appendChild(createActionButton(act, allItems));
+    });
   });
 }
 
+function createActionButton(act, allItems) {
+  const btn = document.createElement('button');
+  btn.className = 'btn-action';
+
+  const missing = [];
+  if (act.required_item_id && !state.inventory.includes(act.required_item_id)) {
+    const item = allItems.find(i => i.id === act.required_item_id);
+    missing.push(`Butuh: ${item ? item.name : act.required_item_id}`);
+  }
+  if (act.required_stat) {
+    Object.keys(act.required_stat).forEach(k => {
+      if ((state.stats[k] || 0) < act.required_stat[k]) {
+        const cfg = GAME_DATA.stats_config[k];
+        missing.push(`${cfg.icon} ${cfg.name} ≥ ${act.required_stat[k]}`);
+      }
+    });
+  }
+
+  if (missing.length > 0) {
+    btn.disabled = true;
+    btn.classList.add('btn-action-disabled');
+    btn.innerHTML = `${act.description}<br><small class="req-hint">🔒 ${missing.join(' • ')}</small>`;
+  } else {
+    if (act.combat) { btn.innerHTML = `⚔️ ${act.description}`; btn.classList.add('btn-action-combat'); }
+    else if (act.dialogue) { btn.innerHTML = `💬 ${act.description}`; btn.classList.add('btn-action-dialogue'); }
+    else { btn.innerText = act.description; }
+    btn.onclick = () => executeAction(act);
+  }
+  return btn;
+}
+
+// ============================================================
+// ACTION EXECUTION
+// ============================================================
 function executeAction(act) {
   AudioManager.playSFX('sfx_action');
 
@@ -628,9 +835,9 @@ function executeAction(act) {
   if (act.stat_changes) {
     Object.keys(act.stat_changes).forEach(k => {
       const cfg = GAME_DATA.stats_config[k];
-      const maxVal = cfg ? cfg.max : 100;
+      const max = cfg ? cfg.max : 100;
       const before = state.stats[k] || 0;
-      state.stats[k] = Math.max(0, Math.min(maxVal, before + act.stat_changes[k]));
+      state.stats[k] = Math.max(0, Math.min(max, before + act.stat_changes[k]));
       showStatFloat(k, state.stats[k] - before);
       if (act.stat_changes[k] < 0 && navigator.vibrate) {
         navigator.vibrate(150);
@@ -643,14 +850,14 @@ function executeAction(act) {
   if (act.unlocked_item_id && !state.inventory.includes(act.unlocked_item_id)) {
     state.inventory.push(act.unlocked_item_id);
     const item = getAllEpisodeItems().find(i => i.id === act.unlocked_item_id);
-    if (item) showToast(`🎁 Didapat: <strong>${item.emoji} ${item.name}</strong>`, 'success', 2400);
+    if (item) showToast(`🎁 Didapat: <strong>${item.emoji} ${item.name}</strong>`, 'success');
   }
   if (act.unlocked_item_ids) {
     act.unlocked_item_ids.forEach(id => {
       if (!state.inventory.includes(id)) {
         state.inventory.push(id);
         const item = getAllEpisodeItems().find(i => i.id === id);
-        if (item) showToast(`🎁 Didapat: <strong>${item.emoji} ${item.name}</strong>`, 'success', 2200);
+        if (item) showToast(`🎁 Didapat: <strong>${item.emoji} ${item.name}</strong>`, 'success');
       }
     });
   }
@@ -659,29 +866,46 @@ function executeAction(act) {
     state.unlockedLocations.push(act.unlock_location_id);
   }
 
+  if (checkEndingTriggers(act)) return;
+
+  // Combat
   if (act.combat) {
-    CombatSystem.combatDef = act.combat;
-    CombatSystem.actionIdForRollback = act.action_id;
-    showCombatHUD();
-    CombatSystem.start(act.combat.enemy);
+    act.combat._actionId = act.action_id;
+    CombatSystem.start(act.combat);
     return;
   }
 
-  if (checkEndingTriggers(act)) return;
-
-  if (act.next_location_id) {
-    state.currentLocationId = act.next_location_id;
-    renderLocation(act.next_location_id);
-  } else if (act.outcome) {
-    startTypewriter(act.outcome, () => {
-      if (act.re_render_actions) renderActions(state.currentEpisode.locations.find(l => l.id === state.currentLocationId).action_options);
-      else renderLocation(state.currentLocationId);
+  // Dialogue
+  if (act.dialogue) {
+    DialogueSystem.start(act.dialogue, () => {
+      if (act.next_location_id) {
+        goToLocation(act.next_location_id, act.transition_text);
+      } else if (act.outcome) {
+        startTypewriter(act.outcome, () => renderLocation(state.currentLocationId));
+      } else {
+        renderLocation(state.currentLocationId);
+      }
     });
+    return;
+  }
+
+  // Navigation with transition
+  if (act.next_location_id) {
+    goToLocation(act.next_location_id, act.transition_text);
+    return;
+  }
+
+  // Regular outcome
+  if (act.outcome) {
+    startTypewriter(act.outcome, () => renderLocation(state.currentLocationId));
   } else {
     renderLocation(state.currentLocationId);
   }
 }
 
+// ============================================================
+// ENDINGS
+// ============================================================
 function checkEndingTriggers(act) {
   let triggeredEnding = null;
 
@@ -694,7 +918,7 @@ function checkEndingTriggers(act) {
     };
   } else if (state.stats.stat3 <= 0) {
     triggeredEnding = (state.currentEpisode.endings && state.currentEpisode.endings['stat3_zero_ending']) || {
-      title: "BAD ENDING: Reputasi Hancur & Nama Baik Terbuang",
+      title: "BAD ENDING: Reputasi Hancur",
       narrative: "Reputasi Anda menyentuh angka 0% akibat skandal atau tindakan tidak terpuji. Anda dikeluarkan dari liga dan nama baik Anda hancur selamanya."
     };
   }
@@ -731,6 +955,9 @@ function showEnding(ending) {
   localStorage.removeItem('liga_petarung_save');
 }
 
+// ============================================================
+// MODALS, INVENTORY, CRAFTING
+// ============================================================
 function setupEventListeners() {
   document.querySelectorAll('.tab-btn').forEach(btn => {
     btn.onclick = (e) => {
@@ -744,6 +971,8 @@ function setupEventListeners() {
       } else if (tab === 'crafting') {
         document.getElementById('crafting-panel').classList.add('active');
         renderCraftingPanel();
+      } else {
+        document.getElementById('main-content').style.display = 'flex';
       }
     };
   });
@@ -757,15 +986,15 @@ function setupEventListeners() {
 }
 
 function getAllEpisodeItems() {
-  let allItems = [];
+  let all = [];
   if (GAME_DATA.episodes) {
     GAME_DATA.episodes.forEach(ep => {
       if (ep.items) ep.items.forEach(it => {
-        if (!allItems.some(x => x.id === it.id)) allItems.push(it);
+        if (!all.some(x => x.id === it.id)) all.push(it);
       });
     });
   }
-  return allItems;
+  return all;
 }
 
 function renderInventory() {
@@ -779,9 +1008,11 @@ function renderInventory() {
   state.inventory.forEach(itemId => {
     const item = allItems.find(i => i.id === itemId);
     if (item) {
+      const catLabel = item.category ? `[${item.category.toUpperCase()}]` : '';
       container.innerHTML += `
         <div class="item-card">
           <strong>${item.emoji || '📦'} ${item.name}</strong>
+          ${catLabel ? `<div class="item-category">${catLabel}</div>` : ''}
           <p style="font-size:0.75rem; margin-top:4px; opacity:0.8;">${item.description}</p>
         </div>
       `;
@@ -801,9 +1032,10 @@ function renderCraftingPanel() {
   state.inventory.forEach(itemId => {
     const item = allItems.find(i => i.id === itemId);
     if (item) {
-      let card = document.createElement('div');
+      const card = document.createElement('div');
       card.className = 'item-card';
-      card.innerHTML = `<strong>${item.emoji || '📦'} ${item.name}</strong>`;
+      const catLabel = item.category ? `[${item.category.toUpperCase()}]` : '';
+      card.innerHTML = `<strong>${item.emoji || '📦'} ${item.name}</strong>${catLabel ? `<div class="item-category">${catLabel}</div>` : ''}`;
       card.onclick = () => {
         if (state.selectedCraftItems.includes(itemId)) {
           state.selectedCraftItems = state.selectedCraftItems.filter(id => id !== itemId);
@@ -820,29 +1052,55 @@ function renderCraftingPanel() {
 
 function executeCrafting() {
   let allRecipes = [];
-  if (GAME_DATA.episodes) {
-    GAME_DATA.episodes.forEach(ep => {
-      if (ep.recipes) allRecipes = allRecipes.concat(ep.recipes);
-    });
-  }
+  GAME_DATA.episodes.forEach(ep => {
+    if (ep.recipes) allRecipes = allRecipes.concat(ep.recipes);
+  });
+
+  const selected = state.selectedCraftItems.map(id => getAllEpisodeItems().find(i => i.id === id)).filter(Boolean);
+  const categoryCount = {};
+  selected.forEach(item => {
+    if (item.category) categoryCount[item.category] = (categoryCount[item.category] || 0) + 1;
+  });
+
   const match = allRecipes.find(r => {
-    return r.required_item_ids.length === state.selectedCraftItems.length &&
-      r.required_item_ids.every(id => state.selectedCraftItems.includes(id));
+    if (r.specific_item_ids) {
+      return r.specific_item_ids.length === state.selectedCraftItems.length &&
+        r.specific_item_ids.every(id => state.selectedCraftItems.includes(id));
+    }
+    if (r.required_categories) {
+      const req = r.required_categories;
+      const reqKeys = Object.keys(req);
+      const selKeys = Object.keys(categoryCount);
+      if (reqKeys.length !== selKeys.length) return false;
+      return reqKeys.every(k => req[k] === categoryCount[k]);
+    }
+    if (r.required_item_ids) {
+      return r.required_item_ids.length === state.selectedCraftItems.length &&
+        r.required_item_ids.every(id => state.selectedCraftItems.includes(id));
+    }
+    return false;
   });
 
   if (match) {
     AudioManager.playSFX('sfx_action');
-    match.required_item_ids.forEach(id => {
-      const idx = state.inventory.indexOf(id);
-      if (idx > -1) state.inventory.splice(idx, 1);
+    match.required_item_ids && match.required_item_ids.forEach(id => {
+      const i = state.inventory.indexOf(id);
+      if (i > -1) state.inventory.splice(i, 1);
     });
-    showToast(`✅ <strong>BERHASIL DIRAKIT</strong><br>${match.result_item_name}<br><small>${match.description}</small>`, 'success', 3600);
+    // For category-based: consume all selected items
+    if (!match.required_item_ids) {
+      state.selectedCraftItems.forEach(id => {
+        const i = state.inventory.indexOf(id);
+        if (i > -1) state.inventory.splice(i, 1);
+      });
+    }
+    showToast(`✅ <strong>${match.result_item_name}</strong><br><small>${match.description}</small>`, 'success', 3800);
     if (match.reward_stat_changes) {
       Object.keys(match.reward_stat_changes).forEach(k => {
         const cfg = GAME_DATA.stats_config[k];
-        const maxVal = cfg ? cfg.max : 100;
+        const max = cfg ? cfg.max : 100;
         const before = state.stats[k] || 0;
-        state.stats[k] = Math.min(maxVal, before + match.reward_stat_changes[k]);
+        state.stats[k] = Math.min(max, before + match.reward_stat_changes[k]);
         showStatFloat(k, state.stats[k] - before);
       });
       renderStats();
@@ -850,42 +1108,44 @@ function executeCrafting() {
     state.selectedCraftItems = [];
     renderCraftingPanel();
     const loc = state.currentEpisode.locations.find(l => l.id === state.currentLocationId);
-    if (loc && loc.action_options) renderActions(loc.action_options);
+    if (loc) renderActions(loc.action_options, loc);
     saveGame();
   } else {
     AudioManager.playSFX('sfx_danger');
-    showToast("❌ <strong>GAGAL DIRAKIT</strong><br>Kombinasi item tidak cocok!", 'error', 3200);
+    showToast("❌ <strong>GAGAL DIRAKIT</strong><br>Kombinasi tidak cocok. Perhatikan kategori item.", 'error', 3200);
   }
 }
 
+// ============================================================
+// SAVE / LOAD
+// ============================================================
 function saveGame() {
-  if (CombatSystem.active) return;
+  if (CombatSystem.active || DialogueSystem.active) return;
   localStorage.setItem('liga_petarung_save', JSON.stringify(state));
 }
 
 function loadGame() {
-  let saved = localStorage.getItem('liga_petarung_save');
-  if (saved) {
-    try {
-      state = JSON.parse(saved);
-    } catch (e) {
-      showToast("⚠️ Save data corrupt, mulai baru.", "error");
-      localStorage.removeItem('liga_petarung_save');
-      location.reload();
-      return;
-    }
-    if (!state.completedActions) state.completedActions = [];
-    if (!state.selectedCraftItems) state.selectedCraftItems = [];
-    if (!state.flags) state.flags = {};
-    if (!state.currentStance) state.currentStance = 'traditional';
-    switchScreen('game-screen');
-    if (state.currentEpisode) {
-      document.getElementById('episode-title').innerText = state.currentEpisode.title.split(':')[0] || "Episode";
-    }
-    renderStats();
-    renderLocation(state.currentLocationId);
-    AudioManager.playBGM();
+  const saved = localStorage.getItem('liga_petarung_save');
+  if (!saved) return;
+  try {
+    state = JSON.parse(saved);
+  } catch (e) {
+    showToast("⚠️ Save corrupt, mulai baru.", "error");
+    localStorage.removeItem('liga_petarung_save');
+    location.reload();
+    return;
   }
+  if (!state.completedActions) state.completedActions = [];
+  if (!state.selectedCraftItems) state.selectedCraftItems = [];
+  if (!state.flags) state.flags = {};
+  if (!state.unlockedLocations) state.unlockedLocations = [];
+  switchScreen('game-screen');
+  if (state.currentEpisode) {
+    document.getElementById('episode-title').innerText = state.currentEpisode.title.split(':')[0] || "Episode";
+  }
+  renderStats();
+  renderLocation(state.currentLocationId);
+  AudioManager.playBGM();
 }
 
 function switchScreen(screenId) {

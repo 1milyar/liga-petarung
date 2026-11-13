@@ -1,0 +1,8 @@
+Tempatkan file audio (.mp3 / .ogg) di folder ini.
+
+Daftar file audio yang dibutuhkan:
+- bgm_arena.mp3
+- sfx_klik.mp3
+- sfx_tegang.mp3
+
+Catatan: Jika file mp3 belum tersedia, engine.js otomatis menggunakan sintesis suara Web Audio API sebagai fallback offline.

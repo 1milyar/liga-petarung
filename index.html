@@ -1,0 +1,454 @@
+<!DOCTYPE html>
+<html lang="id">
+<head>
+  <meta charset="UTF-8">
+  <meta name="viewport" content="width=device-width, initial-scale=1.0, maximum-scale=1.0, user-scalable=no">
+  <title>Liga Petarung: Jalur Sang Juara</title>
+  <style>
+    :root {
+      --bg-color: #121318;
+      --panel-color: #1c1e26;
+      --accent-color: #d97706;
+      --text-color: #f3f4f6;
+    }
+
+    * {
+      box-sizing: border-box;
+      margin: 0;
+      padding: 0;
+      user-select: none;
+    }
+
+    body {
+      background-color: var(--bg-color);
+      color: var(--text-color);
+      font-family: -apple-system, BlinkMacSystemFont, "Segoe UI", Roboto, Helvetica, Arial, sans-serif;
+      display: flex;
+      justify-content: center;
+      align-items: center;
+      min-height: 100vh;
+      overflow: hidden;
+    }
+
+    #app-container {
+      width: 100%;
+      max-width: 480px;
+      height: 100vh;
+      background-color: var(--panel-color);
+      display: flex;
+      flex-direction: column;
+      position: relative;
+      box-shadow: 0 0 20px rgba(0,0,0,0.8);
+    }
+
+    /* Screen Views */
+    .screen {
+      display: none;
+      flex-direction: column;
+      width: 100%;
+      height: 100%;
+    }
+
+    .screen.active {
+      display: flex;
+    }
+
+    /* Title Screen */
+    #title-screen {
+      justify-content: center;
+      align-items: center;
+      padding: 24px;
+      text-align: center;
+      background: linear-gradient(180deg, rgba(0,0,0,0.6) 0%, var(--bg-color) 100%);
+      overflow-y: auto;
+    }
+
+    #title-screen h1 {
+      font-size: 2rem;
+      color: var(--accent-color);
+      margin-bottom: 8px;
+      text-transform: uppercase;
+      letter-spacing: 2px;
+    }
+
+    #title-screen p {
+      font-size: 0.9rem;
+      opacity: 0.8;
+      margin-bottom: 24px;
+    }
+
+    .btn-main {
+      width: 100%;
+      padding: 14px;
+      margin-bottom: 12px;
+      background-color: var(--accent-color);
+      color: #fff;
+      border: none;
+      border-radius: 8px;
+      font-weight: bold;
+      font-size: 1rem;
+      cursor: pointer;
+      transition: transform 0.1s, background-color 0.2s;
+    }
+
+    .btn-main:active {
+      transform: scale(0.98);
+      background-color: #b45309;
+    }
+
+    /* Header Status */
+    #game-header {
+      padding: 12px 16px;
+      background-color: rgba(0,0,0,0.4);
+      border-bottom: 1px solid rgba(255,255,255,0.1);
+      display: flex;
+      flex-direction: column;
+      gap: 8px;
+    }
+
+    .header-top {
+      display: flex;
+      justify-content: space-between;
+      align-items: center;
+    }
+
+    #episode-title {
+      font-size: 0.85rem;
+      font-weight: bold;
+      color: var(--accent-color);
+    }
+
+    #audio-toggle {
+      background: none;
+      border: none;
+      color: var(--text-color);
+      font-size: 1.2rem;
+      cursor: pointer;
+    }
+
+    .status-bars {
+      display: grid;
+      grid-template-columns: repeat(3, 1fr);
+      gap: 8px;
+    }
+
+    .stat-box {
+      background: rgba(0,0,0,0.3);
+      padding: 6px;
+      border-radius: 6px;
+      font-size: 0.75rem;
+    }
+
+    .stat-label {
+      display: flex;
+      justify-content: space-between;
+      margin-bottom: 4px;
+    }
+
+    .bar-bg {
+      width: 100%;
+      height: 6px;
+      background: rgba(255,255,255,0.1);
+      border-radius: 3px;
+      overflow: hidden;
+    }
+
+    .bar-fill {
+      height: 100%;
+      background-color: var(--accent-color);
+      width: 100%;
+      transition: width 0.3s ease;
+    }
+
+    /* Main Narrative Area */
+    #main-content {
+      flex: 1;
+      overflow-y: auto;
+      padding: 16px;
+      display: flex;
+      flex-direction: column;
+      gap: 12px;
+    }
+
+    #scene-visual {
+      width: 100%;
+      aspect-ratio: 16/9;
+      border-radius: 8px;
+      overflow: hidden;
+      background-color: #000;
+      display: none;
+      border: 1px solid rgba(255,255,255,0.1);
+    }
+
+    #scene-visual img {
+      width: 100%;
+      height: 100%;
+      object-fit: cover;
+      transition: opacity 0.5s;
+    }
+
+    #location-name {
+      font-size: 1.2rem;
+      color: var(--accent-color);
+      border-bottom: 1px solid rgba(255,255,255,0.1);
+      padding-bottom: 4px;
+    }
+
+    #narrative-box {
+      font-size: 0.95rem;
+      line-height: 1.6;
+      white-space: pre-line;
+      flex-grow: 1;
+    }
+
+    #skip-btn {
+      align-self: flex-end;
+      background: none;
+      border: 1px solid rgba(255,255,255,0.2);
+      color: var(--text-color);
+      font-size: 0.75rem;
+      padding: 4px 8px;
+      border-radius: 4px;
+      cursor: pointer;
+      display: none;
+    }
+
+    #action-list {
+      display: flex;
+      flex-direction: column;
+      gap: 8px;
+      margin-top: 12px;
+    }
+
+    .btn-action {
+      background: rgba(255,255,255,0.05);
+      border: 1px solid rgba(255,255,255,0.15);
+      color: var(--text-color);
+      padding: 12px;
+      border-radius: 6px;
+      font-size: 0.88rem;
+      text-align: left;
+      cursor: pointer;
+      transition: background 0.2s;
+    }
+
+    .btn-action:active {
+      background: var(--accent-color);
+    }
+
+    /* ===== Disabled Action Button (Requirement Locked) ===== */
+    .btn-action:disabled,
+    .btn-action-disabled {
+      opacity: 0.55;
+      cursor: not-allowed;
+      background: rgba(255, 255, 255, 0.02);
+      border: 1px dashed rgba(255, 255, 255, 0.18);
+      color: #9ca3af;
+      text-align: left;
+    }
+
+    .btn-action .req-hint {
+      display: block;
+      margin-top: 6px;
+      font-size: 0.72rem;
+      color: #f59e0b;
+      opacity: 0.95;
+      letter-spacing: 0.3px;
+    }
+
+    /* ===== Toast Notification System ===== */
+    #toast-container {
+      position: fixed;
+      top: 16px;
+      left: 50%;
+      transform: translateX(-50%);
+      z-index: 9999;
+      display: flex;
+      flex-direction: column;
+      gap: 10px;
+      pointer-events: none;
+      width: calc(100% - 32px);
+      max-width: 440px;
+    }
+
+    .toast {
+      padding: 12px 14px;
+      border-radius: 10px;
+      background: #1f2937;
+      color: #f3f4f6;
+      font-size: 0.85rem;
+      line-height: 1.45;
+      box-shadow: 0 8px 24px rgba(0, 0, 0, 0.55);
+      border-left: 4px solid #d97706;
+      opacity: 0;
+      transform: translateY(-24px) scale(0.96);
+      transition: opacity 0.3s ease, transform 0.3s ease;
+      pointer-events: auto;
+      word-wrap: break-word;
+    }
+
+    .toast.show {
+      opacity: 1;
+      transform: translateY(0) scale(1);
+    }
+
+    .toast-success { border-left-color: #16a34a; }
+    .toast-error   { border-left-color: #dc2626; }
+    .toast-info    { border-left-color: #2563eb; }
+
+    .toast strong { color: #fbbf24; }
+
+    /* Tab Navigation */
+    #tab-bar {
+      display: flex;
+      background: rgba(0,0,0,0.6);
+      border-top: 1px solid rgba(255,255,255,0.1);
+    }
+
+    .tab-btn {
+      flex: 1;
+      padding: 12px;
+      background: none;
+      border: none;
+      color: #888;
+      font-size: 0.8rem;
+      display: flex;
+      flex-direction: column;
+      align-items: center;
+      gap: 4px;
+      cursor: pointer;
+    }
+
+    .tab-btn.active {
+      color: var(--accent-color);
+      border-top: 2px solid var(--accent-color);
+    }
+
+    /* Modals & Sub-Panels */
+    .modal-panel {
+      display: none;
+      position: absolute;
+      top: 100px;
+      left: 0;
+      right: 0;
+      bottom: 50px;
+      background: var(--panel-color);
+      z-index: 10;
+      padding: 16px;
+      flex-direction: column;
+      overflow-y: auto;
+    }
+
+    .modal-panel.active {
+      display: flex;
+    }
+
+    .grid-list {
+      display: grid;
+      grid-template-columns: repeat(2, 1fr);
+      gap: 8px;
+      margin-top: 12px;
+    }
+
+    .item-card {
+      background: rgba(0,0,0,0.3);
+      border: 1px solid rgba(255,255,255,0.1);
+      padding: 10px;
+      border-radius: 6px;
+      font-size: 0.8rem;
+      cursor: pointer;
+    }
+
+    .item-card.selected {
+      border-color: var(--accent-color);
+      background: rgba(217, 119, 6, 0.2);
+    }
+
+    /* Ending Screen */
+    #ending-screen {
+      justify-content: center;
+      align-items: center;
+      padding: 24px;
+      text-align: center;
+      background: #000;
+      overflow-y: auto;
+    }
+
+    #ending-title {
+      font-size: 1.5rem;
+      color: var(--accent-color);
+      margin-bottom: 12px;
+    }
+
+    #ending-desc {
+      font-size: 0.9rem;
+      line-height: 1.6;
+      margin-bottom: 24px;
+    }
+  </style>
+</head>
+<body>
+
+  <div id="app-container">
+    
+    <!-- Title Screen -->
+    <div id="title-screen" class="screen active">
+      <h1 id="app-title">LIGA PETARUNG</h1>
+      <p>Dari Padepokan ke Puncak Dunia</p>
+      <div id="episode-list" style="width: 100%; margin-bottom: 16px;"></div>
+      <button id="btn-continue" class="btn-main" style="display:none; background-color: #2563eb;">Lanjutkan Progres Terakhir</button>
+    </div>
+
+    <!-- Game Screen -->
+    <div id="game-screen" class="screen">
+      <div id="game-header">
+        <div class="header-top">
+          <span id="episode-title">Episode 1</span>
+          <button id="audio-toggle">🔊</button>
+        </div>
+        <div class="status-bars" id="stats-container"></div>
+      </div>
+
+      <div id="main-content">
+        <div id="scene-visual"><img id="scene-img" src="" alt="Scene Visual"></div>
+        <h2 id="location-name">Lokasi</h2>
+        <div id="narrative-box"></div>
+        <button id="skip-btn">Lewati Teks ⏩</button>
+        <div id="action-list"></div>
+      </div>
+
+      <!-- Tab Panels -->
+      <div id="inventory-panel" class="modal-panel">
+        <h3>🎒 Kitab & Inventaris Barang</h3>
+        <div class="grid-list" id="inventory-list"></div>
+      </div>
+
+      <div id="crafting-panel" class="modal-panel">
+        <h3>⚗️ Meja Rakit & Taktik Jurus</h3>
+        <p style="font-size:0.8rem; opacity:0.8;">Pilih 2-3 item dari tas untuk digabungkan menjadi resep jamu atau taktik pertarungan:</p>
+        <div class="grid-list" id="craft-inventory-list"></div>
+        <button id="btn-execute-craft" class="btn-main" style="margin-top:16px;">Gabungkan Item Selected</button>
+      </div>
+
+      <!-- Navigation Bar -->
+      <div id="tab-bar">
+        <button class="tab-btn active" data-tab="main">🗺️<br>Eksplorasi</button>
+        <button class="tab-btn" data-tab="inventory">🎒<br>Inventaris</button>
+        <button class="tab-btn" data-tab="crafting">⚗️<br>Taktik / Rakit</button>
+      </div>
+    </div>
+
+    <!-- Ending Screen -->
+    <div id="ending-screen" class="screen">
+      <h2 id="ending-title">HASIL AKHIR</h2>
+      <div id="ending-desc"></div>
+      <button id="btn-restart" class="btn-main">Kembali ke Menu Utama</button>
+    </div>
+
+  </div>
+
+  <script src="story_data.js"></script>
+  <script src="story_data2.js"></script>
+  <script src="engine.js"></script>
+</body>
+</html>

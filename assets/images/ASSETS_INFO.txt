@@ -1,0 +1,13 @@
+Tempatkan file gambar latar (.webp / .jpg / .png) rasio 16:9 di folder ini.
+
+Daftar file gambar yang dibutuhkan:
+- scene_padepokan.webp
+- scene_pelataran.webp
+- scene_dapur.webp
+- scene_pasarmalam.webp
+- scene_gor.webp
+- scene_hotel.webp
+- scene_gym.webp
+- scene_mess.webp
+- scene_gorkab.webp
+- scene_finalkab.webp
